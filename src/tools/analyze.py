@@ -15,6 +15,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from cpdl_session import get_cpdl_session
 from db import get_connection
 
 TOOL_SPEC = {
@@ -62,13 +63,15 @@ def _cache_path(work_id: str, source_media_id: str | None, url: str) -> Path:
 
 
 def _download(url: str, dest: Path) -> None:
-    """Download *url* to *dest*, streaming to keep memory low."""
-    resp = requests.get(
-        url,
-        headers={"User-Agent": _USER_AGENT},
-        timeout=30,
-        stream=True,
-    )
+    """Download *url* to *dest*.
+
+    CPDL URLs are routed through CPDLSession (Cloudflare-authenticated curl_cffi).
+    All other URLs use plain requests.
+    """
+    if "cpdl.org" in url:
+        resp = get_cpdl_session().get(url, timeout=60)
+    else:
+        resp = requests.get(url, headers={"User-Agent": _USER_AGENT}, timeout=60)
     resp.raise_for_status()
     dest.write_bytes(resp.content)
 

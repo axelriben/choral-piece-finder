@@ -15,6 +15,17 @@ The sources used in the initial version are Choral Public Domain Library (CPDL) 
 
 3.4 Homonymy + work containment disambiguation: disambiguating works with the same name by the same composer, e.g., Peterson-Berger's J.P. Jacobsen vs Sigrid Elmblad Stämning. The Elmblad Stämning is available as a standalone entry on Peterson-Berger's composer page, while the Jacobsen is inside the entry "8 songs for mixed choir".
 
+## 3.5 Cloudflare session helper (src/cpdl_session.py)
+
+CPDL is protected by Cloudflare's managed challenge. `CPDLSession` (in
+`src/cpdl_session.py`) encapsulates the bypass: Playwright launches real Chrome
+once to acquire a `cf_clearance` cookie, which is then injected into a
+`curl_cffi` session configured with Chrome TLS impersonation. Cookie age is
+tracked and the Playwright step re-runs automatically when cookies approach
+expiry (default 20 min), so long crawls and on-demand score downloads both work
+without manual intervention. Both `crawl_cpdl.py` and `tools/analyze.py` use it
+via `get_cpdl_session()`.
+
 ## 4. Architecture overview
 The system will have two phases: an offline indexing phase and an online query phase. The offline indexing phase includes crawling CPDL and SMH and parsing, normalizing and storing locally. In the online query phase, the user asking a question like in the example in section 1. Then the agent uses tools to query the local index and return an answer.
 

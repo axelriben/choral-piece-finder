@@ -8,8 +8,12 @@ The argument is the composer's CPDL page title (underscores or spaces). The
 script uses linkshere to enumerate all pages that link to the composer, keeps
 only unambiguous work pages (title ends with "(Composer Name)"), fetches each
 page's wikitext via action=parse, and writes the results to
-data/cpdl_<last-name>.json. A headless Chrome window appears briefly to pass
-Cloudflare's bot challenge before API calls begin.
+data/cpdl_<last-name>.json.
+
+Cloudflare bypass is handled by cpdl_session.CPDLSession, which launches a
+real Chrome window once (or whenever the cf_clearance cookie ages past the
+configured lifetime) and reuses the authenticated session for all subsequent
+requests.  Cookie expiry mid-crawl is no longer a problem.
 """
 
 import json
@@ -19,12 +23,10 @@ import sys
 import time
 from pathlib import Path
 
-from curl_cffi import requests as cffi_requests
-from playwright.sync_api import sync_playwright
+from cpdl_session import CPDLSession, get_cpdl_session
 
 API_BASE = "https://www2.cpdl.org/wiki/api.php"
 WIKI_BASE = "https://www2.cpdl.org/wiki/index.php"
-USER_AGENT = "ChoralPieceFinder/0.1 (university IR lab; axel.riben.3208@student.uu.se; https://github.com/axelriben/choral-piece-finder) python-requests/2.x"
 REQUEST_DELAY = 2.5
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -32,67 +34,15 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Cloudflare bypass: launch real Chromium, solve the JS challenge, grab cookies
-# ---------------------------------------------------------------------------
-
-def get_cf_cookies() -> list[dict]:
-    """
-    Navigate to CPDL with a real browser, wait for the Cloudflare challenge to
-    resolve, and return the cookies needed for subsequent API requests.
-
-    Uses the system Chrome installation (channel='chrome') with the webdriver
-    flag masked so Cloudflare cannot trivially detect automation.
-    """
-    log.info("Launching browser to pass Cloudflare challenge (one-time)…")
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(
-            channel="chrome",
-            headless=False,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        ctx = browser.new_context(user_agent=USER_AGENT)
-        # Hide the navigator.webdriver flag that Cloudflare checks
-        ctx.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-        page = ctx.new_page()
-
-        page.goto("https://www.cpdl.org/wiki/index.php/Main_Page", timeout=60_000)
-
-        # Poll until the Cloudflare interstitial ("Just a moment…" / "Vänta…") is gone
-        CF_INTERSTITIALS = ("just a moment", "vänta")
-        for _ in range(30):
-            title = page.title().lower()
-            if not any(s in title for s in CF_INTERSTITIALS):
-                break
-            log.info("  waiting for Cloudflare challenge… (%s)", page.title())
-            time.sleep(2)
-        else:
-            log.warning("Cloudflare challenge may not have resolved; proceeding anyway")
-
-        cookies = ctx.cookies()
-        browser.close()
-    log.info("Browser cookies obtained (%d cookies).", len(cookies))
-    return cookies
-
-
-def make_session(cookies: list[dict]) -> cffi_requests.Session:
-    """Build a curl_cffi session pre-loaded with the Cloudflare cookies."""
-    s = cffi_requests.Session(impersonate="chrome")
-    s.headers["User-Agent"] = USER_AGENT
-    s.headers["Accept"] = "application/json, text/javascript, */*; q=0.01"
-    s.headers["Accept-Language"] = "en-US,en;q=0.9"
-    # Convert Playwright cookie dicts to a simple name→value mapping
-    for ck in cookies:
-        s.cookies.set(ck["name"], ck["value"], domain=ck.get("domain", ""))
-    return s
-
-
-# ---------------------------------------------------------------------------
 # CPDL API helpers
 # ---------------------------------------------------------------------------
 
-def api_get(session: cffi_requests.Session, params: dict) -> dict:
+def api_get(session: CPDLSession, params: dict) -> dict:
+    """Send a CPDL MediaWiki API request and return the decoded JSON.
+
+    Raises RuntimeError on 403 (Cloudflare not resolved) or if the site
+    returns HTML (maintenance mode) instead of JSON.
+    """
     params["format"] = "json"
     resp = session.get(API_BASE, params=params, timeout=30)
     if resp.status_code == 403:
@@ -100,7 +50,6 @@ def api_get(session: cffi_requests.Session, params: dict) -> dict:
             "Still getting 403 from CPDL — Cloudflare challenge may not have resolved."
         )
     resp.raise_for_status()
-    # Detect CPDL's own maintenance/emergency page (returns text/html instead of JSON)
     ct = resp.headers.get("content-type", "")
     if "text/html" in ct:
         snippet = resp.text[:200].replace("\n", " ")
@@ -111,12 +60,12 @@ def api_get(session: cffi_requests.Session, params: dict) -> dict:
     return resp.json()
 
 
-def get_linked_pages(session: cffi_requests.Session, composer_title: str) -> list[str]:
+def get_linked_pages(session: CPDLSession, composer_title: str) -> list[str]:
+    """Return all main-namespace, non-redirect page titles linking to the composer page.
+
+    Follows lhcontinue pagination tokens until exhausted.
     """
-    Return all main-namespace, non-redirect page titles that link to the
-    composer's page, following lhcontinue pagination tokens.
-    """
-    titles = []
+    titles: list[str] = []
     params = {
         "action": "query",
         "prop": "linkshere",
@@ -138,7 +87,7 @@ def get_linked_pages(session: cffi_requests.Session, composer_title: str) -> lis
     return titles
 
 
-def get_wikitext(session: cffi_requests.Session, page_title: str) -> str | None:
+def get_wikitext(session: CPDLSession, page_title: str) -> str | None:
     """Fetch raw wikitext for a single page via action=parse. Returns None on failure."""
     params = {
         "action": "parse",
@@ -194,16 +143,14 @@ def _guess_format(url: str, label: str) -> str | None:
 
 
 def _score_urls(wikitext: str) -> list[dict]:
-    urls = []
-    seen = set()
-    # Bracketed external links: [http://... label]
+    urls: list[dict] = []
+    seen: set[str] = set()
     for m in re.finditer(r"\[((https?://[^\s\]]+))\s*([^\]]*)\]", wikitext):
         url, label = m.group(1), m.group(3).strip()
         fmt = _guess_format(url, label)
         if fmt and url not in seen:
             urls.append({"format": fmt, "url": url})
             seen.add(url)
-    # Bare URLs ending in known score extensions
     for m in re.finditer(
         r"(https?://\S+\.(?:pdf|xml|mxl|midi?|sib|mus|ly))", wikitext, re.IGNORECASE
     ):
@@ -216,6 +163,7 @@ def _score_urls(wikitext: str) -> list[dict]:
 
 
 def parse_work(page_title: str, wikitext: str, cpdl_url: str) -> dict:
+    """Parse raw wikitext into a structured work record."""
     def f(*keys):
         for k in keys:
             v = _field(wikitext, k)
@@ -266,8 +214,13 @@ def composer_display_name(composer_title: str) -> str:
 # ---------------------------------------------------------------------------
 
 def crawl(composer_title: str) -> list[dict]:
-    cookies = get_cf_cookies()
-    session = make_session(cookies)
+    """Crawl all disambiguated work pages for *composer_title* and return records.
+
+    Cookie refresh is now automatic: CPDLSession re-runs Playwright whenever
+    the cf_clearance cookie ages past cookie_lifetime_minutes (default 20 min),
+    so long crawls no longer suffer 403s in their tail.
+    """
+    session = get_cpdl_session()
 
     display_name = composer_display_name(composer_title)
     suffix = f"({display_name})"
@@ -279,18 +232,12 @@ def crawl(composer_title: str) -> list[dict]:
     work_titles = [t for t in all_titles if t.endswith(suffix)]
     skipped = len(all_titles) - len(work_titles)
     log.info(
-        "Keeping %d disambiguated work pages; skipping %d without parenthetical (v1.1)",
-        len(work_titles), skipped,
+        "Keeping %d disambiguated work pages; skipping %d without parenthetical (v1.1 TODO)",
+        len(work_titles),
+        skipped,
     )
 
-    # Limitation: the cf_clearance cookie obtained at startup has a finite
-    # lifetime (empirically ~15 minutes). On long crawls (200+ works at 2.5 s/req
-    # ≈ 8+ minutes) the cookie can expire mid-crawl, causing the tail of requests
-    # to return 403s and be silently dropped as warnings.
-    # TODO (v1.1): refresh the Cloudflare cookie periodically — either on a fixed
-    # interval (e.g. every 15 minutes) or on first 403 detection — by re-running
-    # get_cf_cookies() and rebuilding the session with make_session().
-    works = []
+    works: list[dict] = []
     for i, title in enumerate(work_titles, 1):
         url = page_url(title)
         log.info("[%d/%d] %s", i, len(work_titles), title)
