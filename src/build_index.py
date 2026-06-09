@@ -25,6 +25,8 @@ import sys
 import unicodedata
 from pathlib import Path
 
+from utils import normalize_voicing, normalize_title
+
 log = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -82,8 +84,13 @@ _EXT_TO_FORMAT: dict[str, str] = {
 # Helpers
 # ---------------------------------------------------------------------------
 
-def normalize_title(s: str) -> str:
-    """NFKD decompose, strip combining chars, lowercase, alphanumeric+spaces only."""
+def _slug_normalize(s: str) -> str:
+    """NFKD decompose, strip combining chars, lowercase, alphanumeric+spaces only.
+
+    Used internally for stable work_id slug generation. Do not change — any
+    change here alters existing work_ids. For search-oriented title normalization
+    use utils.normalize_title instead.
+    """
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = s.lower()
@@ -92,18 +99,18 @@ def normalize_title(s: str) -> str:
 
 
 def make_title_slug(title: str, max_len: int = 60) -> str:
-    """Hyphenated slug from normalize_title, truncated to max_len characters."""
-    slug = "-".join(normalize_title(title).split())
+    """Hyphenated slug from _slug_normalize, truncated to max_len characters."""
+    slug = "-".join(_slug_normalize(title).split())
     return slug[:max_len].rstrip("-")
 
 
 def make_work_id(composer_norm: str, title: str) -> str:
     """
     Generate base work_id as "{surname_lower}_{title_slug}".
-    Diacritics in the surname are stripped via normalize_title.
+    Diacritics in the surname are stripped via _slug_normalize.
     """
     surname_raw = composer_norm.split(",")[0]
-    surname = normalize_title(surname_raw).replace(" ", "-")
+    surname = _slug_normalize(surname_raw).replace(" ", "-")
     return f"{surname}_{make_title_slug(title)}"
 
 
@@ -130,6 +137,47 @@ def infer_genre(work_category: str | None) -> str | None:
         return "Sacred"
     if any(w in wc for w in ("choir", "chorus", "song", "choral", "part-song", "partsong")):
         return "Secular"
+    return None
+
+
+_CHORAL_INDICATORS = [
+    "choir", "kör", "chorus", "vocal ensemble", "vocal group",
+    "ttbb", "ssaa", "satb", "ssaattbb", "mixed choir", "male choir",
+    "female choir", "children's choir", "youth choir", "a cappella choir",
+]
+
+_NON_CHORAL_INDICATORS = [
+    "voice and piano", "voice and orchestra", "solo voice",
+    "symphony", "concerto", "chamber music", "string quartet", "organ",
+    "piano", "orchestra",
+]
+
+
+def infer_is_choral(work_category: str | None, source: str) -> int | None:
+    """Return 1 (choral), 0 (non-choral), or None (unknown) for a work.
+
+    CPDL is exclusively choral content → always 1.
+    For SMH records, match against keyword lists; choral keywords take
+    precedence over non-choral ones so 'choir with piano' → 1.
+    Returns None when classification is uncertain (caller should log and
+    default to 0).
+    """
+    if source == "cpdl":
+        return 1
+
+    if not work_category:
+        return None
+
+    wc = work_category.lower()
+
+    for indicator in _CHORAL_INDICATORS:
+        if indicator in wc:
+            return 1
+
+    for indicator in _NON_CHORAL_INDICATORS:
+        if indicator in wc:
+            return 0
+
     return None
 
 
@@ -191,6 +239,7 @@ CREATE TABLE works (
     composer_birth_year  INTEGER,
     composer_death_year  INTEGER,
     title_primary        TEXT NOT NULL,
+    title_normalized     TEXT,
     title_alternates_json TEXT,
     incipit              TEXT,
     text_author          TEXT,
@@ -207,6 +256,7 @@ CREATE TABLE works (
     key_text             TEXT,
     parent_work_id       TEXT REFERENCES works(work_id),
     has_free_score       BOOLEAN NOT NULL DEFAULT 0,
+    is_choral            BOOLEAN NOT NULL DEFAULT 0,
     description          TEXT,
     raw_record_blob      TEXT
 );
@@ -223,6 +273,7 @@ CREATE TABLE voicings (
     voicing_id           INTEGER PRIMARY KEY AUTOINCREMENT,
     work_id              TEXT NOT NULL REFERENCES works(work_id),
     voicing_string       TEXT NOT NULL,
+    voicing_normalized   TEXT,
     num_voices           INTEGER,
     is_primary           BOOLEAN NOT NULL DEFAULT 1,
     notes                TEXT
@@ -240,12 +291,15 @@ CREATE TABLE media_files (
 );
 
 CREATE INDEX idx_works_composer ON works(composer_norm);
+CREATE INDEX idx_works_title_norm ON works(title_normalized);
 CREATE INDEX idx_works_period ON works(period);
 CREATE INDEX idx_voicings_string ON voicings(voicing_string);
+CREATE INDEX idx_voicings_normalized ON voicings(voicing_normalized);
 CREATE INDEX idx_voicings_work ON voicings(work_id);
 CREATE INDEX idx_media_format ON media_files(format);
 CREATE INDEX idx_media_work ON media_files(work_id);
-CREATE INDEX idx_sources_work ON sources(work_id);\
+CREATE INDEX idx_sources_work ON sources(work_id);
+CREATE INDEX idx_works_is_choral ON works(is_choral);\
 """
 
 
@@ -315,14 +369,16 @@ def ingest_cpdl(conn: sqlite3.Connection, records: list[dict], tracker: Collisio
                 """
                 INSERT INTO works (
                     work_id, composer_norm, composer_birth_year, composer_death_year,
-                    title_primary, incipit, text_language,
+                    title_primary, title_normalized, incipit, text_language,
                     year_composition, year_composition_raw, period,
-                    genre_main, genre_sub, instruments, description, raw_record_blob
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    genre_main, genre_sub, instruments, description, raw_record_blob,
+                    is_choral
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     work_id, composer_norm, birth, death,
                     title,
+                    normalize_title(title),
                     rec.get("incipit"),
                     (rec.get("languages") or [None])[0],
                     year,
@@ -333,6 +389,7 @@ def ingest_cpdl(conn: sqlite3.Connection, records: list[dict], tracker: Collisio
                     rec.get("instruments"),
                     rec.get("description"),
                     json.dumps(rec, ensure_ascii=False),
+                    1,  # CPDL is exclusively choral
                 ),
             )
         except sqlite3.IntegrityError as exc:
@@ -352,8 +409,8 @@ def ingest_cpdl(conn: sqlite3.Connection, records: list[dict], tracker: Collisio
             if not vs:
                 continue
             conn.execute(
-                "INSERT INTO voicings (work_id, voicing_string, num_voices, is_primary) VALUES (?,?,?,?)",
-                (work_id, vs, rec.get("number_of_voices") if i == 0 else None, i == 0),
+                "INSERT INTO voicings (work_id, voicing_string, voicing_normalized, num_voices, is_primary) VALUES (?,?,?,?,?)",
+                (work_id, vs, normalize_voicing(vs), rec.get("number_of_voices") if i == 0 else None, i == 0),
             )
             stats["voicings"] += 1
 
@@ -416,6 +473,15 @@ def ingest_smh(
         base_id = make_work_id(composer_norm, title)
         work_id = tracker.assign(base_id)
 
+        work_category = rec.get("work_category")
+        is_choral_val = infer_is_choral(work_category, "smh")
+        if is_choral_val is None:
+            log.debug(
+                "SMH %s (%s): is_choral unknown for work_category=%r — defaulting to 0",
+                work_id, title, work_category,
+            )
+            is_choral_val = 0
+
         # Exclude raw_html from the blob (it's large and redundant).
         blob = {k: v for k, v in rec.items() if k != "raw_html"}
 
@@ -424,16 +490,17 @@ def ingest_smh(
                 """
                 INSERT INTO works (
                     work_id, composer_norm, composer_birth_year, composer_death_year,
-                    title_primary, title_alternates_json, incipit,
+                    title_primary, title_normalized, title_alternates_json, incipit,
                     text_author, text_author_dates, text_language,
                     year_composition, year_composition_raw, period,
                     genre_main, instruments, duration_min_sec, duration_max_sec,
-                    description, raw_record_blob
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    description, raw_record_blob, is_choral
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     work_id, composer_norm, birth, death,
                     title,
+                    normalize_title(title),
                     alternates_json,
                     incipit,
                     rec.get("text_author"),
@@ -448,6 +515,7 @@ def ingest_smh(
                     rec.get("duration_max_sec"),
                     rec.get("description"),
                     json.dumps(blob, ensure_ascii=False),
+                    is_choral_val,
                 ),
             )
         except sqlite3.IntegrityError as exc:
@@ -464,8 +532,8 @@ def ingest_smh(
 
         for vs, is_primary in parse_smh_voicings(rec):
             conn.execute(
-                "INSERT INTO voicings (work_id, voicing_string, is_primary) VALUES (?,?,?)",
-                (work_id, vs, is_primary),
+                "INSERT INTO voicings (work_id, voicing_string, voicing_normalized, is_primary) VALUES (?,?,?,?)",
+                (work_id, vs, normalize_voicing(vs), is_primary),
             )
             stats["voicings"] += 1
 
@@ -580,6 +648,9 @@ def sanity_report(
         "SELECT composer_norm, COUNT(*) FROM works GROUP BY composer_norm ORDER BY composer_norm"
     ).fetchall()
 
+    is_choral_rows = conn.execute(
+        "SELECT is_choral, COUNT(*) FROM works GROUP BY is_choral ORDER BY is_choral DESC"
+    ).fetchall()
     works_free     = conn.execute("SELECT COUNT(*) FROM works WHERE has_free_score = 1").fetchone()[0]
     no_title       = conn.execute(
         "SELECT COUNT(*) FROM works WHERE title_primary IS NULL OR title_primary = ''"
@@ -607,6 +678,10 @@ def sanity_report(
         print(f"  source={src:<22}: {cnt}")
     print(f"Total sources rows            : {total_sources}")
     print()
+    print("is_choral distribution:")
+    for flag, cnt in is_choral_rows:
+        label = "choral" if flag else "non-choral/unknown"
+        print(f"  is_choral={flag} ({label:<20}): {cnt}")
     print(f"has_free_score = 1            : {works_free}")
     print(f"Missing critical fields:")
     print(f"  no title                    : {no_title}")

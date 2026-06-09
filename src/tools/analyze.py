@@ -98,7 +98,15 @@ def analyze_score_features(work_id: str) -> dict:
     conn = get_connection()
 
     if not conn.execute("SELECT 1 FROM works WHERE work_id = ?", (work_id,)).fetchone():
-        return {"available": False, "reason": f"work_id not found: {work_id}"}
+        return {
+            "error": "work_id_not_found",
+            "work_id_attempted": work_id,
+            "message": (
+                "The work_id provided does not exist in the index. "
+                "Call search_local_index with the user's query to obtain a valid work_id, "
+                "then retry this tool with that work_id."
+            ),
+        }
 
     fmt_placeholders = ",".join("?" * len(_MUSICXML_FORMATS))
     media_row = conn.execute(

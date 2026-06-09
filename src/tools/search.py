@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from db import get_connection
+from utils import normalize_voicing
 
 TOOL_SPEC = {
     "name": "search_local_index",
@@ -18,7 +19,9 @@ TOOL_SPEC = {
         "Searches the unified index of choral works. Use this as the primary retrieval tool. "
         "Returns up to 25 matching works with summary information. "
         "Multiple filters are combined with AND. "
-        "Free-text query searches title, incipit, and description."
+        "Free-text query searches title, incipit, and description. "
+        "By default, only choral works are returned; set include_non_choral=true "
+        "to also surface solo songs and instrumental pieces."
     ),
     "parameters": {
         "type": "object",
@@ -78,13 +81,23 @@ TOOL_SPEC = {
             "has_free_score": {
                 "type": "boolean",
                 "description": (
-                    "Restrict to works with at least one downloadable score. Optional."
+                    "Set to true ONLY to restrict the search to works that have at least "
+                    "one freely downloadable score. Omit this parameter (do not set to false) "
+                    "if the user does not explicitly require a free score."
                 ),
             },
             "limit": {
                 "type": "integer",
                 "description": "Maximum number of results. Default 25, max 100.",
                 "default": 25,
+            },
+            "include_non_choral": {
+                "type": "boolean",
+                "description": (
+                    "Set to true ONLY when the user explicitly asks about non-choral works "
+                    "(solo songs, instrumental, orchestral, etc.). Omit this parameter by "
+                    "default — searches return choral works only by default."
+                ),
             },
         },
     },
@@ -103,16 +116,22 @@ def search_local_index(
     duration_min_sec: int | None = None,
     has_free_score: bool | None = None,
     limit: int = 25,
+    include_non_choral: bool = False,
 ) -> list[dict]:
     """Search the unified index with optional structured filters.
 
     All filters are optional and combined with AND.  Returns a list of summary
-    dicts enriched with voicings and sources lists.
+    dicts enriched with voicings and sources lists.  By default, only works
+    where is_choral=1 are returned; set include_non_choral=True to include
+    solo songs and instrumental pieces.
     """
     limit = min(int(limit), 100)
 
     clauses: list[str] = []
     params: list = []
+
+    if not include_non_choral:
+        clauses.append("w.is_choral = 1")
 
     if query:
         words = query.split()
@@ -134,10 +153,10 @@ def search_local_index(
             "EXISTS ("
             "  SELECT 1 FROM voicings v"
             "  WHERE v.work_id = w.work_id"
-            "  AND LOWER(v.voicing_string) LIKE LOWER(?)"
+            "  AND v.voicing_normalized LIKE ?"
             ")"
         )
-        params.append(f"%{voicing}%")
+        params.append(f"%{normalize_voicing(voicing)}%")
 
     if num_voices is not None:
         clauses.append(

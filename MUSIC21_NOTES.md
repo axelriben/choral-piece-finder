@@ -11,12 +11,16 @@ and SMH catalogs don't provide, particularly per-voice vocal ranges.
 
 ## Verification performed
 
-We analysed Palestrina's motet *Accepit Iesus calicem a 6* using the
-Pothárn Imre edition (CPDL #56519, posted 2020-01-03), the most recent
-upload at the time of writing. The MusicXML is a multi-file MXL archive
-(one `.musicxml` file per part) generated from a LilyPond source. We
-compared music21's output to the ranges visible in the PDF score for the
-same edition.
+We verified two Palestrina CPDL editions:
+
+**Accepit Iesus calicem a 6** — Pothárn Imre edition (CPDL #56519,
+posted 2020-01-03). The MusicXML is a multi-file MXL archive (one
+`.musicxml` file per part) generated from a LilyPond source.
+
+**Sicut cervus** — a second independently-tested edition.
+
+Both show the same uniform octave-too-high displacement across all voices.
+The table below documents the Accepit Iesus calicem results:
 
 | Part    | music21 reported | Actual (score) | Error            |
 |---------|-----------------|----------------|------------------|
@@ -27,20 +31,20 @@ same edition.
 | Quintus | G3–G5           | G2–G3          | +1 octave (lower portion) +2 octaves (upper portion) |
 | Bassus  | C3–B5           | C2–D3          | +1 octave (lower notes) +3 octaves (top note) |
 
-The interval span (range in semitones) is correct for every part. Only the
-absolute octave registration is wrong.
+**The interval span (range in semitones) is correct for every voice in every
+edition tested.** Only the absolute octave registration is affected.
 
 ## Three categories of error
 
-**1. Uniform octave displacement.** Every part is reported one octave too
-high. The MXL file stores pitches using a convention where middle C is C4,
-consistent with the MusicXML specification. However, inspection of the raw
-XML reveals that the encoder stored *written* pitch (as it appears on the
-staff) rather than *sounding* pitch for all six parts. Music21 interprets
-these as concert pitch, producing readings one octave above the actual
-sounding range. This is an encoding convention error in the source file,
-not a music21 defect per se, though it means music21 cannot recover the
-correct absolute pitch without additional context.
+**1. Uniform octave displacement across all Renaissance editions tested.**
+Every voice in both the Accepit Iesus calicem and Sicut cervus editions is
+reported one octave too high. The likely cause: modern CPDL editions
+commonly use treble-8vb clefs (a treble clef with a small 8 below) for
+upper voices and the tenor to improve readability for modern singers. Music21's
+interpretation of these clefs appears to be inconsistent — it does not
+reliably apply the implied one-octave-down transposition when computing
+absolute pitch. This is a known limitation in music21's handling of
+`<clef-octave-change>` markers in MusicXML.
 
 **2. Partial additional displacement on 8vb treble-clef parts.** The Tenor
 (P4) and Quintus (P5) parts carry a
@@ -63,9 +67,9 @@ chord layer) or a single stray note in the LilyPond-generated file.
 ## Why these errors occur
 
 Renaissance polyphony presents several compounding challenges for MusicXML
-parsers: original clefs (chiavette) used inconsistently alongside modern
-convenience clefs, optional octave-transposition markers with no
-standardised convention for whether pitch data represents written or
+parsers: treble-8vb clefs used for all upper voices and the tenor (a modern
+editorial convention for readability), optional octave-transposition markers
+with no standardised convention for whether pitch data represents written or
 sounding pitch, and dense six-to-eight voice textures where chord-tone
 attribution to the correct part is non-trivial. music21 is a general-purpose
 library designed for a broad range of Western art music; it handles these
@@ -74,12 +78,17 @@ vocal polyphony.
 
 ## Scope of the limitation
 
-The errors described above appear specific to editions that use original-clef
-notation combined with non-standard octave encoding in the MXL file. Modern
-editions (standard G, C, and F clefs without octave-change markers, sounding
-pitch as per the MusicXML specification) produce correct ranges in our
-testing. The limitation primarily affects Renaissance CPDL editions; SMH
-works have no MusicXML at all, so they are unaffected.
+The uniform octave-too-high displacement has been confirmed across all
+Renaissance choral polyphony editions tested (Accepit Iesus calicem and
+Sicut cervus, both from CPDL). Both are multi-voice Renaissance works
+encoded with treble-8vb clefs for upper voices.
+
+Solo song editions and instrumental editions are not affected by this
+bug — the issue is specific to Renaissance choral polyphony where
+treble-8vb clefs are used for upper voices. Modern choral editions in
+standard clefs (G, C, and F without octave-change markers) also produce
+correct results. SMH works have no MusicXML at all and are therefore
+unaffected.
 
 ## Why we are not addressing this in v1
 

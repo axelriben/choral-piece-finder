@@ -50,7 +50,15 @@ def get_work_details(work_id: str) -> dict:
     ).fetchone()
 
     if work_row is None:
-        return {"error": "work_id not found", "work_id": work_id}
+        return {
+            "error": "work_id_not_found",
+            "work_id_attempted": work_id,
+            "message": (
+                "The work_id provided does not exist in the index. "
+                "Call search_local_index with the user's query to obtain a valid work_id, "
+                "then retry this tool with that work_id."
+            ),
+        }
 
     work = dict(work_row)
 

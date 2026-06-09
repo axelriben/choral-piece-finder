@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from db import get_connection
+from utils import normalize_title
 
 TOOL_SPEC = {
     "name": "disambiguate_homonyms",
@@ -19,7 +20,9 @@ TOOL_SPEC = {
         "When a composer + title query has multiple plausible matches, returns "
         "each candidate with disambiguating information (incipit, text author, "
         "key, parent work). Use whenever a search yields multiple works with "
-        "similar titles by the same composer."
+        "similar titles by the same composer. "
+        "By default, only choral works are returned; set include_non_choral=true "
+        "to also surface solo songs and instrumental pieces."
     ),
     "parameters": {
         "type": "object",
@@ -32,33 +35,48 @@ TOOL_SPEC = {
                 "type": "string",
                 "description": "Title or title fragment. Substring match.",
             },
+            "include_non_choral": {
+                "type": "boolean",
+                "description": (
+                    "Set to true ONLY when the user explicitly asks about non-choral works "
+                    "(solo songs, instrumental, orchestral, etc.). Omit this parameter by "
+                    "default — disambiguation returns choral works only by default."
+                ),
+            },
         },
         "required": ["composer", "title"],
     },
 }
 
 
-def disambiguate_homonyms(composer: str, title: str) -> dict:
+def disambiguate_homonyms(
+    composer: str, title: str, include_non_choral: bool = False
+) -> dict:
     """Return all works matching *composer* and *title* with disambiguating fields.
 
     Each candidate includes: work_id, title_primary, title_alternates, incipit
     (up to 80 chars), text_author, key_text, year_composition, primary voicing,
-    and parent work title (if the work is part of a cycle).
+    and parent work title (if the work is part of a cycle).  By default only
+    choral works are returned; set include_non_choral=True to include solo songs
+    and instrumental pieces.
 
     Returns {"candidates": [...], "count": N, "note": "..."}.
     """
     conn = get_connection()
 
+    choral_clause = "" if include_non_choral else "AND is_choral = 1"
+
     rows = conn.execute(
-        """
+        f"""
         SELECT work_id, title_primary, title_alternates_json, incipit,
                text_author, key_text, year_composition, parent_work_id
         FROM works
         WHERE LOWER(composer_norm) LIKE LOWER(?)
-          AND LOWER(title_primary) LIKE LOWER(?)
+          AND title_normalized LIKE ?
+          {choral_clause}
         ORDER BY title_primary, work_id
         """,
-        (f"%{composer}%", f"%{title}%"),
+        (f"%{composer}%", f"%{normalize_title(title)}%"),
     ).fetchall()
 
     if not rows:

@@ -67,6 +67,52 @@ _FORMAT_ALIASES: dict[str, str] = {
     "midi":     "MIDI",
 }
 
+_TRANSLATION_MARKERS = re.compile(
+    r"espanol|spanish|english|deutsch|italian|francais|translated",
+    re.IGNORECASE,
+)
+_TRANSPOSITION_MARKERS = re.compile(
+    r"transpos(?:ed|ition)|down a \w+|up a \w+|\bin [A-G](?:\s*flat|\s*sharp)?\b",
+    re.IGNORECASE,
+)
+
+
+def _score_file(f: dict) -> int:
+    """Compute a quality score for a single media file (higher = better edition)."""
+    score = 0
+    source = (f.get("source") or "").lower()
+    fmt = (f.get("format") or "").lower()
+    url = (f.get("url") or "").lower()
+    notes = (f.get("notes") or "").lower()
+    filename = url.rsplit("/", 1)[-1].lower()
+    text = filename + " " + notes
+
+    if source == "smh":
+        score += 100
+    elif source == "cpdl" and "cpdl.org" in url:
+        score += 50
+
+    if fmt in ("mxl", "musicxml"):
+        score += 30
+    elif fmt == "pdf":
+        score += 20
+    elif fmt == "midi":
+        score += 10
+
+    if _TRANSLATION_MARKERS.search(text):
+        score -= 50
+
+    if _TRANSPOSITION_MARKERS.search(text):
+        score -= 30
+
+    if "parts" in notes and "score" not in notes:
+        score -= 20
+
+    if f.get("discovered_via") == "work_page":
+        score += 5
+
+    return score
+
 
 def fetch_score(work_id: str, preferred_format: str = "any") -> dict:
     """Return available score files for *work_id*, or guidance if none exist.
@@ -90,12 +136,19 @@ def fetch_score(work_id: str, preferred_format: str = "any") -> dict:
     ).fetchone()
 
     if work_row is None:
-        return {"error": "work_id not found", "work_id": work_id}
+        return {
+            "error": "work_id_not_found",
+            "work_id_attempted": work_id,
+            "message": (
+                "The work_id provided does not exist in the index. "
+                "Call search_local_index with the user's query to obtain a valid work_id, "
+                "then retry this tool with that work_id."
+            ),
+        }
 
     media_rows = conn.execute(
         "SELECT format, url, source, source_media_id, discovered_via, notes"
-        " FROM media_files WHERE work_id = ?"
-        " ORDER BY discovered_via, format, media_id",
+        " FROM media_files WHERE work_id = ?",
         (work_id,),
     ).fetchall()
 
@@ -111,6 +164,9 @@ def fetch_score(work_id: str, preferred_format: str = "any") -> dict:
         fmt_filter = _FORMAT_ALIASES.get(preferred_format.lower(), preferred_format.upper())
 
     all_files = [dict(r) for r in media_rows]
+    for f in all_files:
+        f["quality_score"] = _score_file(f)
+    all_files.sort(key=lambda f: f["quality_score"], reverse=True)
 
     if fmt_filter:
         filtered = [f for f in all_files if f["format"].upper() == fmt_filter.upper()]
