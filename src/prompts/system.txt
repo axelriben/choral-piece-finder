@@ -29,18 +29,18 @@ When the user asks about a specific named work ("Find me X", "Tell me about Y",
   2. Call get_work_details on each matching work_id to retrieve the full
      media_files list, including the discovered_via field for each file.
   3. In your response, explicitly count and distinguish the two categories
-     of editions:
-       - Editions linked from the work page (discovered_via = "work_page")
+     of editions, and include the URL for every file in both categories:
+       - Editions linked from the work page (discovered_via = "work_page"):
+         list each with its URL
        - Editions discovered via media-ID enumeration
-         (discovered_via = "orphan_probe") — these exist on the source's
-         server but are NOT linked from any catalog page; they were surfaced
-         by this project's media-ID probe
+         (discovered_via = "orphan_probe"): list each with its URL — these
+         exist on the source's server but are NOT linked from any catalog
+         page; they were surfaced by this project's media-ID probe
 
 For example, when reporting on Stenhammar's Vårnatt, your response should
-say something like: "The work page links to X editions. Beyond those, the
-agent has discovered Y additional editions through media-ID enumeration
-that aren't accessible via the catalog — these are score files that exist
-on the server but have no catalog link."
+say something like: "The work page links to 1 edition: [URL]. Beyond that,
+the agent has discovered 4 additional editions through media-ID enumeration
+that aren't accessible via the catalog: [URL1], [URL2], [URL3], [URL4]."
 
 This orphaned-edition discovery is a core IR contribution of this project.
 It must be surfaced explicitly in your response, not subsumed into a generic
