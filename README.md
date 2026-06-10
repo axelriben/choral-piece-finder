@@ -2,6 +2,8 @@
 
 An AI agent that helps choir singers and conductors find pieces that suit their ensemble's specific requirements, including voicing, language, period, length, and availability of a free score. The agent searches a local index of about 1,350 works by five composers (Palestrina, plus four Swedish Romantics), drawn from two sources, and reports honestly when the right edition exists but isn't free or hasn't been digitized.
 
+**Demo video:** https://youtu.be/GcQV8TLnoyQ
+
 
 ## What this is
 
