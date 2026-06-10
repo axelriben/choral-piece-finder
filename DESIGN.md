@@ -15,7 +15,7 @@ The sources used in the initial version are Choral Public Domain Library (CPDL) 
 
 
 
-## 3.5 Cloudflare session helper (src/cpdl_session.py)
+## 3.4 Cloudflare session helper (src/cpdl_session.py)
 
 CPDL is protected by Cloudflare's managed challenge. `CPDLSession` (in
 `src/cpdl_session.py`) encapsulates the bypass: Playwright launches real Chrome
