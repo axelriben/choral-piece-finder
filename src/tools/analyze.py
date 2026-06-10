@@ -81,6 +81,53 @@ def _pitch_to_scientific(pitch) -> str:
     return pitch.nameWithOctave
 
 
+def _detect_octave_shift(parts: list[dict]) -> bool:
+    """Return True if every part's lowest pitch appears displaced one octave up.
+
+    The clear signal: in genuine Renaissance polyphony the lowest note in the
+    entire score always falls well below G2 (MIDI 43). If it doesn't, and 2+
+    parts are sitting above G3 (MIDI 55), the score is almost certainly
+    shifted up by one octave by music21.
+
+    False-positive risk: genuine chiavette scores transposed to high pitch
+    level (very rare in modern CPDL editions). Accepted as a v1 tradeoff.
+    """
+    if not parts:
+        return False
+    lowest_lowest = min(
+        (p["lowest_pitch_midi"] for p in parts if p.get("lowest_pitch_midi") is not None),
+        default=None,
+    )
+    if lowest_lowest is None:
+        return False
+    if lowest_lowest >= 43:  # G2
+        suspicious_count = sum(
+            1 for p in parts
+            if p.get("lowest_pitch_midi") is not None and p["lowest_pitch_midi"] >= 55  # G3
+        )
+        if suspicious_count >= 2:
+            return True
+    return False
+
+
+def _shift_part_down_octave(part: dict) -> dict:
+    """Return a copy of *part* with all pitch fields shifted down one octave."""
+    from music21 import pitch as m21_pitch
+    shifted = dict(part)
+    for field in ("lowest_pitch", "highest_pitch"):
+        if part.get(field):
+            try:
+                p = m21_pitch.Pitch(part[field])
+                p.octave -= 1
+                shifted[field] = p.nameWithOctave
+            except Exception:
+                pass
+    for field in ("lowest_pitch_midi", "highest_pitch_midi"):
+        if part.get(field) is not None:
+            shifted[field] = part[field] - 12
+    return shifted
+
+
 def analyze_score_features(work_id: str) -> dict:
     """Analyse the MusicXML score for *work_id* and return computed features.
 
@@ -210,7 +257,7 @@ def analyze_score_features(work_id: str) -> dict:
     total_ql = score.duration.quarterLength if score.duration else 0.0
     estimated_duration_sec = round((total_ql / bpm) * 60) if bpm else None
 
-    return {
+    result: dict = {
         "available": True,
         "work_id": work_id,
         "source_url": url,
@@ -220,3 +267,15 @@ def analyze_score_features(work_id: str) -> dict:
         "num_measures": num_measures,
         "estimated_duration_sec": estimated_duration_sec,
     }
+
+    if _detect_octave_shift(parts_info):
+        result["parts"] = [_shift_part_down_octave(p) for p in parts_info]
+        result["octave_shift_applied"] = True
+        result["octave_shift_note"] = (
+            "Detected and corrected a uniform octave displacement in "
+            "music21's interpretation. This commonly occurs with Renaissance "
+            "editions using treble-8vb or original-clef notation. "
+            "The reported ranges are the corrected (sounding) pitches."
+        )
+
+    return result

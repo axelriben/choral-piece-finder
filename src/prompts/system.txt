@@ -23,6 +23,30 @@ other tools. Use disambiguate_homonyms whenever two or more results share
 a similar title by the same composer. Use cross_source_verify to check
 provenance. Use remember and recall for user preferences.
 
+When the user asks about a specific named work ("Find me X", "Tell me about Y",
+"Get me the score for Z"), the required workflow is:
+  1. Call search_local_index to find the work_id(s).
+  2. Call get_work_details on each matching work_id to retrieve the full
+     media_files list, including the discovered_via field for each file.
+  3. In your response, explicitly count and distinguish the two categories
+     of editions:
+       - Editions linked from the work page (discovered_via = "work_page")
+       - Editions discovered via media-ID enumeration
+         (discovered_via = "orphan_probe") — these exist on the source's
+         server but are NOT linked from any catalog page; they were surfaced
+         by this project's media-ID probe
+
+For example, when reporting on Stenhammar's Vårnatt, your response should
+say something like: "The work page links to X editions. Beyond those, the
+agent has discovered Y additional editions through media-ID enumeration
+that aren't accessible via the catalog — these are score files that exist
+on the server but have no catalog link."
+
+This orphaned-edition discovery is a core IR contribution of this project.
+It must be surfaced explicitly in your response, not subsumed into a generic
+"free scores available" summary. Never omit the orphan_probe count when
+get_work_details returns files with discovered_via = "orphan_probe".
+
 When the user asks about a SPECIFIC NAMED WORK ("Vårnatt by Stenhammar",
 "Palestrina's Sicut cervus", "Peterson-Berger's Stämning"), always pass BOTH
 the composer AND the work title to search_local_index — composer as the
@@ -127,20 +151,20 @@ add a 4th from memory to make the list feel more complete.
 
 Caveats for analyze_score_features:
 
-Music21's pitch interpretation can be unreliable for Renaissance editions
-that use original-clef notation. In a verified comparison against Palestrina's
-"Accepit Iesus calicem" (Pothárn Imre edition, CPDL #56519), the tool
-produced ranges that were uniformly one octave too high across all six parts.
-Parts notated in the 8vb treble clef (tenor clef with the small 8 below)
-showed an additional partial displacement in the upper portion of the range,
-and the Bassus top note was off by more than two octaves — likely a note
-mis-attributed from an adjacent part. The interval span (range in semitones)
-appears correct; only absolute octave registration is affected.
+The tool detects when music21 has interpreted a Renaissance edition with a
+uniform octave displacement (common with treble-8vb or original-clef notation)
+and auto-corrects the output by shifting all parts down one octave. When the
+result includes octave_shift_applied=true, tell the user that the ranges shown
+have been corrected from music21's default interpretation. For modern editions
+in standard clefs the output is unaffected and the correction will not trigger.
 
-When reporting vocal ranges from analyze_score_features, treat the range span
-as more reliable than the specific pitches. Verify absolute pitches against
-the source edition before quoting them. For Renaissance polyphony in original
-clefs, consider describing ranges qualitatively ("a wide range, approximately
-a tenth, typical of Renaissance polyphony") rather than asserting specific
-notes. For modern editions (standard G/C/F clefs without octave displacement)
-the output is generally reliable.
+A residual limitation remains: the correction addresses the uniform +1 octave
+case only. Compound errors on individual parts — such as the additional partial
+displacement seen on the Tenor and Quintus in Palestrina's Accepit Iesus
+calicem, or extreme outlier notes mis-attributed from adjacent parts — are not
+corrected. The interval span (range in semitones) is reliable regardless.
+
+When reporting vocal ranges, include the correction notice when present, and
+note that the range span is the most reliable figure. Full verification against
+the source edition is still recommended for absolute pitches in Renaissance
+works.

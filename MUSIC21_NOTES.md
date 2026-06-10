@@ -90,26 +90,74 @@ standard clefs (G, C, and F without octave-change markers) also produce
 correct results. SMH works have no MusicXML at all and are therefore
 unaffected.
 
-## Why we are not addressing this in v1
+## Post-processing heuristic (added in v1)
 
-Correct absolute-pitch recovery from octave-transposing-clef MusicXML would
-require either detecting and reversing the encoder's octave convention at
-parse time (heuristic, fragile) or parsing the full score-layout context to
-infer clef intent (substantial engineering). Neither approach is
-straightforward. More importantly, the IR contributions of this project —
-cross-source metadata reconciliation, orphaned-media discovery, and
-confidence-tiered retrieval — do not depend on correct pitch-range data.
-The analyze tool adds value by providing structural information (measure
-count, time signature, key estimate, range *span*) even when absolute
-octave registration is wrong.
+`analyze_score_features` now applies a heuristic correction before returning
+results. The correction targets the most common case: uniform +1 octave
+displacement across all parts.
+
+**Detection logic.** Two conditions must both hold:
+1. The lowest note in the entire score is at or above G2 (MIDI 43). In
+   genuine Renaissance polyphony, the bass voice routinely reaches F1–A1;
+   G2 is comfortable middle territory. A score where nothing falls below G2
+   is almost certainly displaced.
+2. At least two parts have their own lowest note at or above G3 (MIDI 55),
+   confirming the suspiciously high registration is widespread, not
+   isolated to one voice.
+
+When both conditions hold, every part is shifted down one octave uniformly.
+The result dict includes `octave_shift_applied: true` and an explanatory
+`octave_shift_note`.
+
+**Thresholds are based on Renaissance bass range.** F1–A1 is a common
+bass range in Renaissance polyphony; the Bassus in Accepit Iesus calicem
+reaches C2. G2 as a threshold leaves comfortable margin. The G3 threshold
+for individual parts is similarly conservative.
+
+**False-positive risk: treble-only ensembles (SSAA, SSA, etc.).** An all-treble
+choir has no bass part, so its lowest note sits well above G2; 2+ parts
+naturally have their lowest note above G3. The heuristic will fire and
+incorrectly shift the output down one octave. In the current corpus this
+cannot happen because all MusicXML files are Palestrina mixed-voice works.
+If the corpus is expanded to include treble-choir works with MusicXML, the
+heuristic will need a voice-count or voicing-type guard. Accepted as a v1
+tradeoff.
+
+**False-positive risk: chiavette.** Genuine high-clef Renaissance pieces
+(chiavette) written a fourth or fifth above normal pitch level, printed in
+a modern edition *without* transposition to concert pitch, could trigger
+this heuristic. Such editions are rare on CPDL, and the tradeoff — correcting
+the common case, occasionally over-correcting the rare case — is accepted
+for v1.
+
+**Residual errors not addressed by the heuristic:**
+
+- *Partial additional displacement on 8vb treble-clef parts.* The Tenor and
+  Quintus parts in Accepit Iesus calicem show a compound error: the lower
+  portion of each part is off by one octave (consistent with the uniform
+  displacement) while the upper portion appears displaced by two octaves.
+  The uniform shift corrects the lower portion but leaves the upper-range
+  notes still one octave too high. This is a known limitation of the
+  current heuristic.
+
+- *Extreme outlier notes from adjacent-part mis-attribution.* The Bassus
+  top note (reported as B5 by music21 vs. actual D3) is an extreme outlier
+  that does not follow the uniform-shift pattern and is not corrected.
+  Shifting it down one octave produces A#4 / Bb4, which is still far outside
+  a plausible bass range. The source of the mis-attribution was not
+  investigated further; it likely involves a chord-tone attributed to the
+  wrong part in the LilyPond-generated MXL.
 
 ## Path for future work
 
-1. Characterise the error patterns across a broader sample of CPDL editions
-   to determine whether the uniform +1 octave shift is consistent (which
-   would allow a simple post-hoc correction for Renaissance works).
-2. Consider a Music21-independent MXL parser that explicitly resolves
+1. Investigate the partial additional displacement on 8vb treble-clef parts
+   (Tenor and Quintus in Accepit Iesus calicem) to determine if a per-part
+   correction is feasible based on clef type detected at parse time.
+2. Handle the extreme Bassus top-note mis-attribution — either by detecting
+   and excluding statistical outliers per-part, or by investigating the
+   specific LilyPond → MXL encoding issue.
+3. Consider a Music21-independent MXL parser that explicitly resolves
    written-vs-sounding pitch and octave-transposition-clef semantics before
    passing notes to the range-computation logic.
-3. Report the inconsistent `<clef-octave-change>` handling (item 2 above)
-   upstream to the music21 project with a minimal reproducing example.
+4. Report the inconsistent `<clef-octave-change>` handling upstream to the
+   music21 project with a minimal reproducing example.

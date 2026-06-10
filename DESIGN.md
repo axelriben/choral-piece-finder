@@ -6,14 +6,14 @@ This AI agent is meant to help choral conductors or singers find choral pieces t
 ## 2. Sources
 The sources used in the initial version are Choral Public Domain Library (CPDL) (https://www1.cpdl.org/wiki/index.php/Main_Page) and Swedish Musical Heritage (SMH) (https://www.swedishmusicalheritage.com). CPDL is a community-maintained library of public-domain choral scores with broad European coverage and frequent MusicXML availability, useful for both retrieval and computed-feature analysis. SMH provides authoritative editorial metadata for Swedish composers, often with downloadable scholarly PDF editions, complementing CPDL's coverage gaps for Nordic Romantic repertoire.
 
-## 3. The four IR problems this addresses
+## 3. The three IR problems this addresses
 3.1 Cross-source metadata reconciliation. Different sources use different conventions and have different metadata quality. For example, CPDL labels Stenhammar's Vårnatt as SATB, while SMH correctly identifies it as SSAATTBB with piano. Both labels are defensible (the piece's texture is mostly four-part with divisi) but a user needs to know that four singers are not enough to represent all divisi.
 
 3.2 Coverage-aware retrieval with tiered confidence. There are at least 4 different confidence tiers that must be taken into account: (1) a full record with elaborate and authoritative metadata and a downloadable PDF score. (2) rich and trustworthy metadata that can be used authoritatively, but the score cannot be directly provided. (3) sparse metadata, no download: Only the coarse fields (Year, Work category, Duration, Text). Information about voicing unavailable. (4) Pieces only visible as entries on a composer's page but without a page of their own, composers with incomplete lists of works, or composers who are absent altogether.
 
 3.3 Orphaned-media discovery beyond the source's own navigation. The score for a piece might be available from a source's database but cannot be found by navigating the interface of the database; it can be revealed as a separate downloadable file by enumerating media IDs directly, even though no work page links to it.
 
-3.4 Homonymy + work containment disambiguation: disambiguating works with the same name by the same composer, e.g., Peterson-Berger's J.P. Jacobsen vs Sigrid Elmblad Stämning. The Elmblad Stämning is available as a standalone entry on Peterson-Berger's composer page, while the Jacobsen is inside the entry "8 songs for mixed choir".
+
 
 ## 3.5 Cloudflare session helper (src/cpdl_session.py)
 
@@ -127,6 +127,8 @@ Errors inside tools are returned as tool results (not raised as exceptions), so 
 
 ## 10. Out of scope (for v1)
 The first version will have no IMSLP integration, no semantic / embedding-based search, no web UI (CLI only), no comprehensive CPDL crawl (5 composers only), no support for in-copyright pieces beyond metadata, no automatic difficulty estimation.
+
+A fourth IR problem imperfectly implemented in this version is homonymy + work containment disambiguation: disambiguating works with the same name by the same composer, e.g., Peterson-Berger's J.P. Jacobsen vs Sigrid Elmblad Stämning. The Elmblad Stämning is available as a standalone entry on Peterson-Berger's composer page, while the Jacobsen is inside the entry "8 songs for mixed choir".
 
 ## 11. Open questions
 
