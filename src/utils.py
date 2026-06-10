@@ -31,7 +31,6 @@ def normalize_voicing(s: str) -> str:
         if lower.startswith(prefix):
             s = s[len(prefix):].strip(": ").strip()
             break
-    s = s.replace(",", " ")
     return "".join(c for c in s if c.isalpha()).upper()
 
 

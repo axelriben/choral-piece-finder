@@ -221,7 +221,15 @@ __marimo__/
 # macOS
 .DS_Store
 
+# SQLite WAL files
+*.db-shm
+*.db-wal
+
+
 # Project data
 data/*.db
 data/*.json
 data/cache/
+data/index.db-shm
+data/index.db-wal
+data/score_cache/

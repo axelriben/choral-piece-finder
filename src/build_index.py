@@ -405,14 +405,25 @@ def ingest_cpdl(conn: sqlite3.Connection, records: list[dict], tracker: Collisio
         stats["sources"] += 1
 
         voicings = rec.get("voicings") or []
-        for i, vs in enumerate(voicings):
-            if not vs:
+        primary_assigned = False
+        for vs_raw in voicings:
+            if not vs_raw:
                 continue
-            conn.execute(
-                "INSERT INTO voicings (work_id, voicing_string, voicing_normalized, num_voices, is_primary) VALUES (?,?,?,?,?)",
-                (work_id, vs, normalize_voicing(vs), rec.get("number_of_voices") if i == 0 else None, i == 0),
-            )
-            stats["voicings"] += 1
+            # CPDL encodes alternative arrangements as comma-separated values
+            # (e.g. 'SSAA,TTBB,AATB'). Split into one row per arrangement so
+            # that normalized substring matching stays accurate.
+            parts = [p.strip() for p in vs_raw.split(",") if p.strip()]
+            for j, part in enumerate(parts):
+                is_primary = not primary_assigned and j == 0
+                conn.execute(
+                    "INSERT INTO voicings (work_id, voicing_string, voicing_normalized, num_voices, is_primary) VALUES (?,?,?,?,?)",
+                    (work_id, part, normalize_voicing(part),
+                     rec.get("number_of_voices") if is_primary else None,
+                     is_primary),
+                )
+                stats["voicings"] += 1
+            if parts:
+                primary_assigned = True
 
         for edition in rec.get("editions") or []:
             for f in edition.get("files") or []:
@@ -531,11 +542,15 @@ def ingest_smh(
         stats["sources"] += 1
 
         for vs, is_primary in parse_smh_voicings(rec):
-            conn.execute(
-                "INSERT INTO voicings (work_id, voicing_string, voicing_normalized, is_primary) VALUES (?,?,?,?)",
-                (work_id, vs, normalize_voicing(vs), is_primary),
-            )
-            stats["voicings"] += 1
+            # SMH voicings are single values but split on commas for consistency.
+            parts = [p.strip() for p in vs.split(",") if p.strip()]
+            for j, part in enumerate(parts):
+                row_primary = is_primary and j == 0
+                conn.execute(
+                    "INSERT INTO voicings (work_id, voicing_string, voicing_normalized, is_primary) VALUES (?,?,?,?)",
+                    (work_id, part, normalize_voicing(part), row_primary),
+                )
+                stats["voicings"] += 1
 
         for mf in rec.get("media_files") or []:
             fmt = mf.get("format")
